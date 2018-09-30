@@ -72,7 +72,39 @@ module Expr =
 
     *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      expr: !(Util.expr
+        (fun x -> x) [|
+          `Lefta, [
+             ostap ("!!"), (fun l r -> Binop ("!!", l, r));
+           ];
+          `Lefta, [
+             ostap ("&&"), (fun l r -> Binop ("&&", l, r));
+          ];
+          `Nona,  [
+             ostap (">="), (fun l r -> Binop (">=", l, r));
+             ostap ("<="), (fun l r -> Binop ("<=", l, r));
+             ostap (">"),  (fun l r -> Binop (">",  l, r));
+             ostap ("<"),  (fun l r -> Binop ("<",  l, r));
+
+             ostap ("=="), (fun l r -> Binop ("==", l, r));
+             ostap ("!="), (fun l r -> Binop ("!=", l, r));
+          ];
+          `Lefta, [
+            ostap ("+"), (fun l r -> Binop ("+",  l, r));
+            ostap ("-"), (fun l r -> Binop ("-",  l, r));
+          ];
+          `Lefta, [
+            ostap ("*"), (fun l r -> Binop ("*",  l, r));
+            ostap ("/"), (fun l r -> Binop ("/",  l, r));
+            ostap ("%"), (fun l r -> Binop ("%",  l, r));
+          ];
+        |]
+        parse
+      );
+
+      parse: -"(" expr -")"
+           | value:DECIMAL { Const value }
+           | id:IDENT      { Var id }
     )
 
   end
@@ -111,7 +143,12 @@ module Stmt =
 
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      read:   -"read" -"(" id: IDENT -")"           { Read id };
+      write:  -"write" -"(" expr:!(Expr.expr) -")" { Write expr };
+      assign: id:IDENT -":=" expr:!(Expr.expr)     { Assign (id, expr) };
+
+      parse:  <s::ss> : !(Util.listBy) [ostap (-";")] [ostap (read | write | assign)]
+                { List.fold_left (fun fst snd -> Seq (fst, snd)) s ss }
     )
 
   end
