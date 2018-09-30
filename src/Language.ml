@@ -4,14 +4,15 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
+open Ostap
 open Ostap.Combinators
-       
+
 (* Simple expressions: syntax and semantics *)
 module Expr =
   struct
-    
-    (* The type for expressions. Note, in regular OCaml there is no "@type..." 
-       notation, it came from GT. 
+
+    (* The type for expressions. Note, in regular OCaml there is no "@type..."
+       notation, it came from GT.
     *)
     @type t =
     (* integer constant *) | Const of int
@@ -25,39 +26,57 @@ module Expr =
         +, -                 --- addition, subtraction
         *, /, %              --- multiplication, division, reminder
     *)
-                                                            
+
     (* State: a partial map from variables to integer values. *)
-    type state = string -> int 
+    type state = string -> int
 
     (* Empty state: maps every variable into nothing. *)
-    let empty = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
+    let empty = fun (x : string) -> failwith (Printf.sprintf "Undefined variable %s" x)
 
-    (* Update: non-destructively "modifies" the state s by binding the variable x 
+    (* Update: non-destructively "modifies" the state s by binding the variable x
       to value v and returns the new state.
     *)
-    let update x v s = fun y -> if x = y then v else s y
+    let update (name : string) (value : int) (get : state) : state
+      = fun y -> if name = y then value else get y
 
     (* Expression evaluator
-
-          val eval : state -> t -> int
- 
-       Takes a state and an expression, and returns the value of the expression in 
+       Takes a state and an expression, and returns the value of the expression in
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval (state : state) (expr : t) : int =
+      let to_int  b = if b      then 1     else 0    in
+      let to_bool i = if i == 0 then false else true in
+        match expr with
+        | Const (x) -> x
+        | Var (str) -> state str
+        | Binop ("+", x, y) -> (eval state x) + (eval state y)
+        | Binop ("-", x, y) -> (eval state x) - (eval state y)
+        | Binop ("*", x, y) -> (eval state x) * (eval state y)
+        | Binop ("/", x, y) -> (eval state x) / (eval state y)
+        | Binop ("%", x, y) -> (eval state x) mod (eval state y)
+        | Binop ("==", x, y) -> to_int (eval state x == eval state y)
+        | Binop ("!=", x, y) -> to_int (eval state x != eval state y)
+        | Binop ("<=", x, y) -> to_int (eval state x <= eval state y)
+        | Binop (">=", x, y) -> to_int (eval state x >= eval state y)
+        | Binop ("<", x, y) -> to_int (eval state x < eval state y)
+        | Binop (">", x, y) -> to_int (eval state x > eval state y)
+        | Binop ("!!", x, y) -> to_int ((to_bool (eval state x)) || (to_bool (eval state y)))
+        | Binop ("&&", x, y) -> to_int ((to_bool (eval state x)) && (to_bool (eval state y)))
+        | _ -> failwith (Printf.sprintf "Unknown type of expression, can't eval")
+
 
     (* Expression parser. You can use the following terminals:
 
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string
-   
+
     *)
     ostap (
       parse: empty {failwith "Not implemented yet"}
     )
 
   end
-                    
+
 (* Simple statements: syntax and sematics *)
 module Stmt =
   struct
@@ -70,33 +89,40 @@ module Stmt =
     (* composition                      *) | Seq    of t * t with show
 
     (* The type of configuration: a state, an input stream, an output stream *)
-    type config = Expr.state * int list * int list 
+    type config = Expr.state * int list * int list
 
     (* Statement evaluator
-
-          val eval : config -> t -> config
-
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval (conf : config) (stmt : t) : config =
+      match stmt with
+       | Read var   ->
+         let (mem, value :: i, o) = conf in
+          (Expr.update var value mem, i, o)
+       | Write expr ->
+         let (mem, i, o) = conf in
+          (mem, i, o @ [Expr.eval mem expr])
+       | Assign (var, expr) ->
+         let (mem, i, o) = conf in
+          (Expr.update var (Expr.eval mem expr) mem, i, o)
+       | Seq (stmt1, stmt2) ->
+         let conf' = eval conf stmt1 in
+          eval conf' stmt2
 
     (* Statement parser *)
     ostap (
       parse: empty {failwith "Not implemented yet"}
     )
-      
+
   end
 
 (* The top-level definitions *)
 
 (* The top-level syntax category is statement *)
-type t = Stmt.t    
+type t = Stmt.t
 
 (* Top-level evaluator
-
-     eval : t -> int list -> int list
-
    Takes a program and its input stream, and returns the output stream
 *)
-let eval p i =
+let eval (p : t) (i : int list) : int list =
   let _, _, o = Stmt.eval (Expr.empty, i, []) p in o
