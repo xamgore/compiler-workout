@@ -1,0 +1,11 @@
+.depend
+*.cmi
+*.cmx
+*.o
+*.opt
+*.log
+!*/orig
+*.s
+/run.sh
+/create.sh
+/Dockerfile
