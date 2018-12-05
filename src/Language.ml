@@ -4,6 +4,7 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
+open Ostap
 open Ostap.Combinators
        
 (* Simple expressions: syntax and semantics *)
@@ -35,7 +36,9 @@ module Expr =
     (* Update: non-destructively "modifies" the state s by binding the variable x 
       to value v and returns the new state.
     *)
-    let update x v s = fun y -> if x = y then v else s y
+    let update (name : string) (value : int) (get : state) : state
+      = fun y -> if name = y then value else get y
+
 
     (* Expression evaluator
 
@@ -44,7 +47,26 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)                                                       
-    let eval st expr = failwith "Not yet implemented"
+    let rec eval (state : state) (expr : t) : int =
+      let to_int  b = if b      then 1     else 0    in
+      let to_bool i = if i == 0 then false else true in
+        match expr with
+        | Const (x)          -> x
+        | Var (str)          -> state str
+        | Binop ("+", x, y)  -> (eval state x) + (eval state y)
+        | Binop ("-", x, y)  -> (eval state x) - (eval state y)
+        | Binop ("*", x, y)  -> (eval state x) * (eval state y)
+        | Binop ("/", x, y)  -> (eval state x) / (eval state y)
+        | Binop ("%", x, y)  -> (eval state x) mod (eval state y)
+        | Binop ("==", x, y) -> to_int (eval state x == eval state y)
+        | Binop ("!=", x, y) -> to_int (eval state x != eval state y)
+        | Binop ("<=", x, y) -> to_int (eval state x <= eval state y)
+        | Binop (">=", x, y) -> to_int (eval state x >= eval state y)
+        | Binop ("<", x, y)  -> to_int (eval state x < eval state y)
+        | Binop (">", x, y)  -> to_int (eval state x > eval state y)
+        | Binop ("!!", x, y) -> to_int ((to_bool (eval state x)) || (to_bool (eval state y)))
+        | Binop ("&&", x, y) -> to_int ((to_bool (eval state x)) && (to_bool (eval state y)))
+        | _                  -> failwith (Printf.sprintf "Unknown type of expression, can't eval")
 
     (* Expression parser. You can use the following terminals:
 
@@ -52,8 +74,38 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
                                                                                                                   
     *)
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+    ostap (
+      expr: !(Util.expr
+        (fun x -> x) [|
+          `Lefta, [
+             ostap ("!!"), (fun l r -> Binop ("!!", l, r));
+           ];
+          `Lefta, [
+             ostap ("&&"), (fun l r -> Binop ("&&", l, r));
+          ];
+          `Nona,  [
+             ostap (">="), (fun l r -> Binop (">=", l, r));
+             ostap ("<="), (fun l r -> Binop ("<=", l, r));
+             ostap (">"),  (fun l r -> Binop (">",  l, r));
+             ostap ("<"),  (fun l r -> Binop ("<",  l, r));
+             ostap ("=="), (fun l r -> Binop ("==", l, r));
+             ostap ("!="), (fun l r -> Binop ("!=", l, r));
+          ];
+          `Lefta, [
+            ostap ("+"), (fun l r -> Binop ("+",  l, r));
+            ostap ("-"), (fun l r -> Binop ("-",  l, r));
+          ];
+          `Lefta, [
+            ostap ("*"), (fun l r -> Binop ("*",  l, r));
+            ostap ("/"), (fun l r -> Binop ("/",  l, r));
+            ostap ("%"), (fun l r -> Binop ("%",  l, r));
+          ];
+        |]
+        parse
+      );
+       parse: -"(" expr -")"
+           | value:DECIMAL { Const value }
+           | id:IDENT      { Var id }
     )
     
   end
@@ -82,11 +134,29 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval conf stmt = failwith "Not yet implemented"
+    let rec eval (conf : config) (stmt : t) : config =
+      match stmt with
+       | Read var   ->
+         let (mem, value :: i, o) = conf in
+          (Expr.update var value mem, i, o)
+       | Write expr ->
+         let (mem, i, o) = conf in
+          (mem, i, o @ [Expr.eval mem expr])
+       | Assign (var, expr) ->
+         let (mem, i, o) = conf in
+          (Expr.update var (Expr.eval mem expr) mem, i, o)
+       | Seq (stmt1, stmt2) ->
+         let conf' = eval conf stmt1 in
+          eval conf' stmt2
                                
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not yet implemented"}
+      read:   -"read" -"(" id: IDENT -")"           { Read id };
+      write:  -"write" -"(" expr:!(Expr.expr) -")"  { Write expr };
+      assign: id:IDENT -":=" expr:!(Expr.expr)      { Assign (id, expr) };
+      parse:  <s::ss> : !(Util.listBy) [ostap (-";")]
+                [ostap (read | write | assign)]
+                { List.fold_left (fun fst snd -> Seq (fst, snd)) s ss }
     )
       
   end

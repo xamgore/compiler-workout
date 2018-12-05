@@ -79,6 +79,47 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+
+let move (from : opnd) (to' : opnd) =
+  match from, to' with
+  | R _, _   -> [Mov (from, to')]
+  | _,   R _ -> [Mov (from, to')]
+  | _,   _   -> [Mov (from, eax); Mov (eax, to')]
+
+let move0 (to' : opnd) = Binop ("^", to', to')
+
+let bitwise x reg subreg =
+  [move0 reg; Binop ("cmp", L 0, x); Set ("nz", subreg); Mov (reg, x)]
+
+let opSuffix = function
+  | ">"  -> "g"
+  | "<"  -> "l"
+  | ">=" -> "ge"
+  | "<=" -> "le"
+  | "==" -> "e"
+  | "!=" -> "ne"
+  | x    -> failwith (Printf.sprintf "Unknown operand type %s" x)
+
+let compileInstruction (env) (instruction : insn) =
+  match instruction with
+  | CONST val' -> let place,  env = env#allocate in env, [Mov (L val', place)]
+  | READ       -> let place,  env = env#allocate in env, [Call "Lread"; Mov (eax, place)]
+  | WRITE      -> let val',   env = env#pop      in env, [Push val'; Call "Lwrite"; Pop eax]
+  | LD    var  -> let place,  env = (env#global var)#allocate
+                                                 in env, move      (M (env#loc var)) place
+  | ST    var  -> let val',   env = (env#global var)#pop
+                                                 in env, move val' (M (env#loc var))
+  | BINOP op   -> let y, x,   env = env#pop2     in
+                  let place,  env = env#allocate in env, match op with
+                  | "+" | "-" | "*" -> [Mov (x, eax); Binop (op, y, eax);    Mov (eax, place)]
+                  | "/"             -> [Mov (x, eax); Cltd; IDiv y;          Mov (eax, place)]
+                  | "%"             -> [Mov (x, eax); Cltd; IDiv y;          Mov (edx, place)]
+                  | "&&" | "!!"     -> bitwise y eax "%al" @
+                                       bitwise x edx "%dl" @
+                                       [Binop (op, eax, edx);                Mov (edx, place)]
+                  | compOrEqOp      -> [Mov (x, eax); Binop ("cmp", y, eax); Mov (L 0, edx);
+                                        Set (opSuffix compOrEqOp, "%dl");    Mov (edx, place)]
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -86,7 +127,12 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not yet implemented"
+let rec compile env = function
+  | []               -> env, []
+  | instr :: program -> let env, compiledInstr   = compileInstruction env instr in
+                        let env, compiledProgram = compile env program          in
+                        env, compiledInstr @ compiledProgram
+
 
 (* A set of strings *)           
 module S = Set.Make (String)
