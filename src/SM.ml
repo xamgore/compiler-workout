@@ -71,6 +71,17 @@ let rec eval env (conf : config) (instructions : insn list) : config =
   match instructions with
   | [] -> conf
   | i :: intrs ->
+    match i with
+    | LABEL _ ->
+      eval env conf intrs
+    | JMP label ->
+      eval env conf (env#labeled label)
+    | CJMP (clause, label) ->
+      let (z :: st, state) = conf in
+      let isTruth = (z = 0 && clause = "z") || (z != 0 && clause = "nz") in
+      let branch = if isTruth then env#labeled label else intrs in
+        eval env (st, state) branch
+    | _ ->
       eval env (evalInsn conf i) intrs
 
 (* Top-level evaluation
@@ -88,6 +99,14 @@ let run p i =
   in
   let m = make_map M.empty p in
   let (_, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], (Expr.empty, i, [])) p in o
+
+
+(* counter is used to generate fresh labels,
+   instead of the state monad or extra argument in the compile func *)
+let counter = object
+  val mutable cnt = 0
+  method freshLabel = cnt <- cnt + 1; Printf.sprintf "label%d" cnt
+end
 
 (* Stack machine compiler
 
@@ -108,3 +127,17 @@ let rec compile (stmt : Language.Stmt.t) : insn list =
   | Language.Stmt.Write expr         -> (compileExpr expr) @ [WRITE]
   | Language.Stmt.Assign (var, expr) -> (compileExpr expr) @ [ST var]
   | Language.Stmt.Seq (fst, snd)     -> (compile fst) @ (compile snd)
+  | Language.Stmt.Skip               -> []
+  | Language.Stmt.Repeat (clause, body) ->
+    let l = counter#freshLabel in
+      [LABEL l] @ (compile body) @ (compileExpr clause) @ [CJMP ("z", l)]
+
+  | Language.Stmt.While (clause, body)   ->
+    let (l, lEnd) = (counter#freshLabel, counter#freshLabel) in
+      [LABEL l] @ (compileExpr clause) @ [CJMP ("z", lEnd)]
+                @ (compile body)       @ [JMP l; LABEL lEnd]
+
+  | Language.Stmt.If (clause, thenBr, elseBr) ->
+    let (lElse, lEnd) = (counter#freshLabel, counter#freshLabel) in
+      (compileExpr clause) @ [CJMP ("z", lElse)] @ (compile thenBr) @ [JMP lEnd]
+                           @ [LABEL lElse] @ (compile elseBr) @ [LABEL lEnd]

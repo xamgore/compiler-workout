@@ -102,6 +102,9 @@ let opSuffix = function
 
 let compileInstruction (env) (instruction : insn) =
   match instruction with
+  | LABEL l    -> env, [Label l]
+  | JMP   l    -> env, [Jmp l]
+  | CJMP (cl, l) -> let val', env = env#pop      in env, [Binop ("cmp", L 0, val'); CJmp (cl, l)]
   | CONST val' -> let place,  env = env#allocate in env, [Mov (L val', place)]
   | READ       -> let place,  env = env#allocate in env, [Call "Lread"; Mov (eax, place)]
   | WRITE      -> let val',   env = env#pop      in env, [Push val'; Call "Lwrite"; Pop eax]

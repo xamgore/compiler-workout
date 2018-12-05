@@ -123,7 +123,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
+    (* loop with a post-condition       *) | Repeat of Expr.t * t  with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
@@ -148,14 +148,46 @@ module Stmt =
        | Seq (stmt1, stmt2) ->
          let conf' = eval conf stmt1 in
           eval conf' stmt2
+       | If (clause, thenBr, elseBr) ->
+         let (mem, i, o) = conf in
+         let branch = if (Expr.eval mem clause) == 0 then elseBr else thenBr in
+          eval conf branch
+       | (While (clause, body)) as loop ->
+         let (mem, i, o) = conf in
+         if (Expr.eval mem clause) == 0 then conf else eval (eval conf body) loop
+       (* repeat === body; while (clause) body; *)
+       | (Repeat (clause, body)) ->
+         let afterOneStep = eval conf body in
+         let whileClause  = Expr.Binop ("==", clause, Const 0) in
+         eval afterOneStep (While (whileClause, body))
+       | Skip -> conf
                                
     (* Statement parser *)
     ostap (
+      skip:   -"skip"                               { Skip };
       read:   -"read" -"(" id: IDENT -")"           { Read id };
       write:  -"write" -"(" expr:!(Expr.expr) -")"  { Write expr };
       assign: id:IDENT -":=" expr:!(Expr.expr)      { Assign (id, expr) };
+
+      whileLoop: -"while" clause:!(Expr.expr) -"do" body:parse -"od"
+                                                    { While (clause, body) };
+
+      repeatLoop: -"repeat" body:parse -"until" clause:!(Expr.expr)
+                                                    { Repeat (clause, body) };
+
+      forLoop: -"for" init:parse -"," clause:!(Expr.expr) -"," step:parse 
+               -"do" body:parse -"od"               { Seq (init, While (clause, Seq (body, step))) };
+
+      ifThen: -"if" clause:!(Expr.expr) -"then" thenBr:parse                   -"fi"
+                                                    { If (clause, thenBr, Skip) }
+            | -"if" clause:!(Expr.expr) -"then" thenBr:parse elseBr:elseBranch -"fi"
+                                                    { If (clause, thenBr, elseBr) };
+      elseBranch: -"else" body:parse { body }
+                | -"elif" clause:!(Expr.expr) -"then" thenBr:parse elseBr:elseBranch
+                                                    { If (clause, thenBr, elseBr) };
+
       parse:  <s::ss> : !(Util.listBy) [ostap (-";")]
-                [ostap (read | write | assign)]
+                [ostap (skip | read | write | assign | whileLoop | repeatLoop | forLoop | ifThen)]
                 { List.fold_left (fun fst snd -> Seq (fst, snd)) s ss }
     )
       
