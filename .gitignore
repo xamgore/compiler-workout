@@ -6,3 +6,6 @@
 *.log
 !**/orig/*.log
 *.s
+/run.sh
+/create.sh
+/Dockerfile
