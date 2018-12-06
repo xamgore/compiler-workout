@@ -180,6 +180,16 @@ module Stmt =
          let whileClause  = Expr.Binop ("==", clause, Const 0) in
          eval env afterOneStep (While (whileClause, body))
        | Skip -> conf
+       | Call (funcName, actualArgsNotNormalized) ->
+         let (mem, i, o) = conf in
+         let (formalArgs, localVars, body) = env#definition funcName in
+         let funcScope  = State.push_scope mem (formalArgs @ localVars) in
+         let actualArgs = List.map (Expr.eval mem) actualArgsNotNormalized in
+         let funcScopeWithArgs = List.fold_left 
+                                 (fun state (name, value) -> State.update name value state)
+                                 funcScope (List.combine formalArgs actualArgs) in
+         let (mem', i', o') = eval env (funcScopeWithArgs, i, o) body in
+           (State.drop_scope mem' mem, i', o')
 
                                 
     (* Statement parser *)
@@ -206,12 +216,20 @@ module Stmt =
                 | -"elif" clause:!(Expr.parse) -"then" thenBr:parse elseBr:elseBranch
                                                     { If (clause, thenBr, elseBr) };
 
+      funcCall: funcName:IDENT -"(" args:!(Expr.parse)* -")"
+                                                    { Call (funcName, args) };
+
       parse:  <s::ss> : !(Util.listBy) [ostap (-";")]
-                [ostap (skip | read | write | assign | whileLoop | repeatLoop | forLoop | ifThen)]
+                [ostap (skip | read | write | assign | whileLoop | repeatLoop | forLoop | ifThen | funcCall)]
                 { List.fold_left (fun fst snd -> Seq (fst, snd)) s ss }
     )
       
   end
+
+
+let fromOption o default = match o with
+  | None   -> default
+  | Some x -> x
 
 (* Function and procedure definitions *)
 module Definition =
@@ -221,7 +239,11 @@ module Definition =
     type t = string * (string list * string list * Stmt.t)
 
     ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+      parse: -"fun" funcName:IDENT
+             -"(" argNames:IDENT* -")"
+             localVars:!( ostap ( -"local" IDENT+ ) )?
+             -"{" body:!(Stmt.parse) -"}"
+             { (funcName, (argNames, fromOption localVars [], body)) }
     )
 
   end

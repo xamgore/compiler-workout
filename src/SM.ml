@@ -87,6 +87,23 @@ let rec eval env (conf : config) (instructions : insn list) : config =
       let branch = if isTruth then env#labeled label else intrs in
         eval env (controlStack, st, state) branch
 
+    | CALL funcName ->
+      let (controlStack, st, (scope, i, o)) = conf in
+        eval env ((intrs, scope) :: controlStack, st, (scope, i, o)) (env#labeled funcName)
+
+    | BEGIN (formalArgs, localVars) ->
+      let (controlStack, st, (scope, i, o)) = conf in
+      let funcScope = State.push_scope scope (formalArgs @ localVars) in
+      let (scope', st') = List.fold_right
+                          (fun name (scope, z :: st) -> (State.update name z scope, st))
+                          formalArgs (funcScope, st) in
+        eval env (controlStack, st', (scope', i, o)) intrs
+
+    | END ->
+      let (controlStack, st, (scope, i, o)) = conf in
+      let (intrs', scope') :: controlStack' = controlStack in
+        eval env (controlStack', st, (State.drop_scope scope scope', i, o)) intrs'
+
     | _ ->
       let (controlStack, st, state) = conf in
       let (st', state') = evalInsn (st, state) i in
@@ -141,6 +158,11 @@ let rec compileStmt (stmt : Language.Stmt.t) : insn list =
     let (lElse, lEnd) = (counter#freshLabel, counter#freshLabel) in
       (compileExpr clause) @ [CJMP ("z", lElse)] @ (compileStmt thenBr) @ [JMP lEnd]
                            @ [LABEL lElse] @ (compileStmt elseBr) @ [LABEL lEnd]
+  | Language.Stmt.Call (funcName, args) ->
+    List.concat (List.map compileExpr args) @ [CALL funcName]
+
+let compileDef (funcName, (formalArgs, localVars, body)) =
+  [LABEL funcName; BEGIN (formalArgs, localVars)] @ compileStmt body @ [END]
 
 (* Stack machine compiler
 
@@ -149,4 +171,7 @@ let rec compileStmt (stmt : Language.Stmt.t) : insn list =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let compile _ = failwith "Not Implemented Yet"
+let rec compile (defs, prog) =
+  let mainL = counter#freshLabel in
+  [JMP mainL] @ List.concat (List.map compileDef defs) 
+              @ [LABEL mainL] @ compileStmt prog
