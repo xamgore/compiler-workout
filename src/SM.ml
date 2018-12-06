@@ -24,6 +24,45 @@ type prg = insn list
  *)
 type config = (prg * State.t) list * int list * Stmt.config
 
+
+let evalInsn (conf : int list * Stmt.config) (i : insn) : (int list * Stmt.config) =
+  match i with
+    | READ ->
+      let (st, (mem, z :: i, o)) = conf in
+        (z :: st, (mem, i, o))
+    | WRITE ->
+      let (z :: st, (mem, i, o)) = conf in
+        (st, (mem, i, o @ [z]))
+    | LD var ->
+      let (st, (mem, i, o)) = conf in
+        (State.eval mem var :: st, (mem, i, o))
+    | ST var ->
+      let (z :: st, (mem, i, o)) = conf in
+        (st, (Language.State.update var z mem, i, o))
+    | CONST value ->
+      let (st, c) = conf in
+        (value :: st, c)
+    | BINOP op ->
+      let (y :: x :: st, c) = conf in
+      let to_int  b = if b      then 1     else 0    in
+      let to_bool i = if i == 0 then false else true in
+      let result = match op with
+        | "+" -> x + y
+        | "-" -> x - y
+        | "*" -> x * y
+        | "/" -> x / y
+        | "%" -> x mod y
+        | "==" -> to_int (x == y)
+        | "!=" -> to_int (x != y)
+        | "<=" -> to_int (x <= y)
+        | ">=" -> to_int (x >= y)
+        | "<" -> to_int (x < y)
+        | ">" -> to_int (x > y)
+        | "!!" -> to_int ((to_bool (x)) || (to_bool (y)))
+        | "&&" -> to_int ((to_bool (x)) && (to_bool (y)))
+        | _ -> failwith (Printf.sprintf "Unknown type of expression, can't eval")
+        in (result :: st, c)
+
 (* Stack machine interpreter
 
      val eval : env -> config -> prg -> config
@@ -31,7 +70,27 @@ type config = (prg * State.t) list * int list * Stmt.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)                         
-let rec eval _ = failwith "Not Implemented Yet"
+let rec eval env (conf : config) (instructions : insn list) : config =
+  match instructions with
+  | [] -> conf
+  | i :: intrs ->
+    match i with
+    | LABEL _ ->
+      eval env conf intrs
+
+    | JMP label ->
+      eval env conf (env#labeled label)
+
+    | CJMP (clause, label) ->
+      let (controlStack, z :: st, state) = conf in
+      let isTruth = (z = 0 && clause = "z") || (z != 0 && clause = "nz") in
+      let branch = if isTruth then env#labeled label else intrs in
+        eval env (controlStack, st, state) branch
+
+    | _ ->
+      let (controlStack, st, state) = conf in
+      let (st', state') = evalInsn (st, state) i in
+        eval env (controlStack, st', state') intrs
 
 (* Top-level evaluation
 
@@ -48,6 +107,40 @@ let run p i =
   in
   let m = make_map M.empty p in
   let (_, _, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], [], (State.empty, i, [])) p in o
+
+
+
+(* counter is used to generate fresh labels,
+   instead of the state monad or extra argument in the compile func *)
+let counter = object
+  val mutable cnt = 0
+  method freshLabel = cnt <- cnt + 1; Printf.sprintf "label%d" cnt
+end
+
+let rec compileExpr (e : Language.Expr.t) : insn list =
+  match e with
+  | Language.Expr.Const (value : int) -> [CONST value]
+  | Language.Expr.Var (name : string) -> [LD name]
+  | Language.Expr.Binop (op, l, r)    -> (compileExpr l) @ (compileExpr r) @ [BINOP op]
+
+let rec compileStmt (stmt : Language.Stmt.t) : insn list =
+  match stmt with
+  | Language.Stmt.Read (var: string) -> [READ; ST var]
+  | Language.Stmt.Write expr         -> (compileExpr expr) @ [WRITE]
+  | Language.Stmt.Assign (var, expr) -> (compileExpr expr) @ [ST var]
+  | Language.Stmt.Seq (fst, snd)     -> (compileStmt fst) @ (compileStmt snd)
+  | Language.Stmt.Skip               -> []
+  | Language.Stmt.Repeat (body, clause) ->
+    let l = counter#freshLabel in
+      [LABEL l] @ (compileStmt body) @ (compileExpr clause) @ [CJMP ("z", l)]
+  | Language.Stmt.While (clause, body)   ->
+    let (l, lEnd) = (counter#freshLabel, counter#freshLabel) in
+      [LABEL l] @ (compileExpr clause) @ [CJMP ("z", lEnd)]
+                @ (compileStmt body)       @ [JMP l; LABEL lEnd]
+  | Language.Stmt.If (clause, thenBr, elseBr) ->
+    let (lElse, lEnd) = (counter#freshLabel, counter#freshLabel) in
+      (compileExpr clause) @ [CJMP ("z", lElse)] @ (compileStmt thenBr) @ [JMP lEnd]
+                           @ [LABEL lElse] @ (compileStmt elseBr) @ [LABEL lEnd]
 
 (* Stack machine compiler
 

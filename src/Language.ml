@@ -4,6 +4,7 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
+open Ostap
 open Ostap.Combinators
 
 (* States *)
@@ -21,9 +22,11 @@ module State =
     (* Update: non-destructively "modifies" the state s by binding the variable x 
        to value v and returns the new state w.r.t. a scope
     *)
-    let update x v s =
-      let u x v s = fun y -> if x = y then v else s y in
-      if List.mem x s.scope then {s with l = u x v s.l} else {s with g = u x v s.g}
+    let update name value state =
+      let u name value state = fun y -> if name = y then value else state y in
+      if List.mem name state.scope
+        then {state with l = u name value state.l}
+        else {state with g = u name value state.g}
 
     (* Evals a variable in a state w.r.t. a scope *)
     let eval s x = (if List.mem x s.scope then s.l else s.g) x
@@ -150,11 +153,62 @@ module Stmt =
 
        which returns a list of formal parameters and a body for given definition
     *)
-    let rec eval _ = failwith "Not Implemented Yet"
+    let rec eval env (conf : config) (stmt : t) : config =
+      match stmt with
+       | Read var   ->
+         let (mem, value :: i, o) = conf in
+          (State.update var value mem, i, o)
+       | Write expr ->
+         let (mem, i, o) = conf in
+          (mem, i, o @ [Expr.eval mem expr])
+       | Assign (var, expr) ->
+         let (mem, i, o) = conf in
+          (State.update var (Expr.eval mem expr) mem, i, o)
+       | Seq (stmt1, stmt2) ->
+         let conf' = eval env conf stmt1 in
+          eval env conf' stmt2
+       | If (clause, thenBr, elseBr) ->
+         let (mem, i, o) = conf in
+         let branch = if (Expr.eval mem clause) == 0 then elseBr else thenBr in
+          eval env conf branch
+       | (While (clause, body)) as loop ->
+         let (mem, i, o) = conf in
+         if (Expr.eval mem clause) == 0 then conf else eval env (eval env conf body) loop
+       (* repeat === body; while (clause) body; *)
+       | (Repeat (body, clause)) ->
+         let afterOneStep = eval env conf body in
+         let whileClause  = Expr.Binop ("==", clause, Const 0) in
+         eval env afterOneStep (While (whileClause, body))
+       | Skip -> conf
+
                                 
     (* Statement parser *)
     ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+      skip:   -"skip"                               { Skip };
+      read:   -"read" -"(" id: IDENT -")"           { Read id };
+      write:  -"write" -"(" expr:!(Expr.parse) -")" { Write expr };
+      assign: id:IDENT -":=" expr:!(Expr.parse)     { Assign (id, expr) };
+
+      whileLoop: -"while" clause:!(Expr.parse) -"do" body:parse -"od"
+                                                    { While (clause, body) };
+
+      repeatLoop: -"repeat" body:parse -"until" clause:!(Expr.parse)
+                                                    { Repeat (body, clause) };
+
+      forLoop: -"for" init:parse -"," clause:!(Expr.parse) -"," step:parse 
+               -"do" body:parse -"od"               { Seq (init, While (clause, Seq (body, step))) };
+
+      ifThen: -"if" clause:!(Expr.parse) -"then" thenBr:parse                   -"fi"
+                                                    { If (clause, thenBr, Skip) }
+            | -"if" clause:!(Expr.parse) -"then" thenBr:parse elseBr:elseBranch -"fi"
+                                                    { If (clause, thenBr, elseBr) };
+      elseBranch: -"else" body:parse { body }
+                | -"elif" clause:!(Expr.parse) -"then" thenBr:parse elseBr:elseBranch
+                                                    { If (clause, thenBr, elseBr) };
+
+      parse:  <s::ss> : !(Util.listBy) [ostap (-";")]
+                [ostap (skip | read | write | assign | whileLoop | repeatLoop | forLoop | ifThen)]
+                { List.fold_left (fun fst snd -> Seq (fst, snd)) s ss }
     )
       
   end
